@@ -1,37 +1,49 @@
-# Riak Core Tutorial
+# Riak Core Tutorial [![Build Status](https://travis-ci.org/lambdaclass/riak_core_tutorial.svg?branch=master)](https://travis-ci.org/lambdaclass/riak_core_tutorial)
 
-A basic example of a riak_core application, using the most
+This repository contains an example riak_core application using the most
 recent version of the [riak_core_ng fork](https://hex.pm/packages/riak_core_ng)
-and running on Erlang/OTP 20 with rebar3.
+and running on Erlang/OTP 21 with rebar3.
 
-This example was largely based on the
+Below is a detailed [tutorial](/#riak-core-tutorial) that explains the step-by-step process to
+produce the same code base from scratch.
+
+The project and tutorial structure were largely based on the
 [Little Riak Core Book](https://marianoguerra.github.io/little-riak-core-book/)
 and the
 [Create a riak_core application in Elixir](https://medium.com/@GPad/create-a-riak-core-application-in-elixir-part-1-41354c1f26c3)
 series.
 
-The code on this repository can be used directly by cloning it; see [Usage](/#usage)
-for example commands. Alternatively,
-the [Tutorial](/#riak-core-tutorial) explains the step-by-step process to
-produce the same code base from scratch.
+## Contents
 
-* [Example application usage](#example-application-usage)
-* [Riak Core Tutorial](#riak-core-tutorial-1)
-  * [When to use Riak Core](#when-to-use-riak-core)
-  * [About this tutorial](#about-this-tutorial)
-  * [Useful links](#useful-links)
-  * [0. Riak Core overview](#0-riak-core-overview)
-  * [1. Setup](#1-setup)
-  * [2. The vnode](#2-the-vnode)
-    * [The riak_vnode behavior](#the-riak_vnode-behavior)
-    * [Application and supervisor setup](#application-and-supervisor-setup)
-    * [Sending commands to the vnode](#sending-commands-to-the-vnode)
-  * [3. Setting up the cluster](#3-setting-up-the-cluster)
-  * [4. Building a distributed Key/Value store](#4-building-a-distributed-keyvalue-store)
-  * [5. Testing](#5-testing)
-  * [6. Coverage commands](#6-coverage-commands)
-  * [7. Handoff](#7-handoff)
-  * [8. Redundancy and fault-tolerance](#8-redundancy-and-fault-tolerance)
+  * [Example application usage](#example-application-usage)
+  * [Riak Core Tutorial](#riak-core-tutorial)
+     * [When to use Riak Core](#when-to-use-riak-core)
+     * [About this tutorial](#about-this-tutorial)
+     * [Useful links](#useful-links)
+     * [0. Riak Core overview](#0-riak-core-overview)
+     * [1. Setup](#1-setup)
+     * [2. The vnode](#2-the-vnode)
+        * [The riak_vnode behavior](#the-riak_vnode-behavior)
+        * [Application and supervisor setup](#application-and-supervisor-setup)
+        * [Sending commands to the vnode](#sending-commands-to-the-vnode)
+     * [3. Setting up the cluster](#3-setting-up-the-cluster)
+     * [4. Building a distributed Key/Value store](#4-building-a-distributed-keyvalue-store)
+     * [5. Testing](#5-testing)
+        * [Test implementations](#test-implementations)
+        * [ct_slave magic](#ct_slave-magic)
+     * [6. Coverage commands](#6-coverage-commands)
+        * [Handle coverage commands in the vnode](#handle-coverage-commands-in-the-vnode)
+        * [The coverage FSM](#the-coverage-fsm)
+        * [Coverage FSM Supervision](#coverage-fsm-supervision)
+        * [Putting it all together](#putting-it-all-together)
+        * [Coverage test](#coverage-test)
+     * [7. Redundancy and fault-tolerance](#7-redundancy-and-fault-tolerance)
+     * [8. Handoff](#8-handoff)
+        * [When does handoff occur?](#when-does-handoff-occur)
+        * [Vnode implementation](#vnode-implementation)
+        * [Ownership handoff example](#ownership-handoff-example)
+        * [Hinted handoff example](#hinted-handoff-example)
+
 
 ## Example application usage
 Run on three separate terminals:
@@ -45,15 +57,19 @@ make dev3
 Join the nodes and ping:
 
 ``` erlang
-(rc_example1@127.0.0.1)1> riak_core:join('rc_example2@127.0.0.1').
-(rc_example1@127.0.0.1)2> riak_core:join('rc_example3@127.0.0.1').
-(rc_example1@127.0.0.1)3> rc_example:ping().
+(rc_example2@127.0.0.1)1> riak_core:join('rc_example1@127.0.0.1').
+(rc_example2@127.0.0.1)2> rc_example:ping().
+```
+
+``` erlang
+(rc_example3@127.0.0.1)1> riak_core:join('rc_example1@127.0.0.1').
+(rc_example3@127.0.0.1)2> rc_example:ping().
 ```
 
 Check the ring status:
 
 ``` erlang
-(rc_example3@127.0.0.1)4> rc_example:ring_status().
+(rc_example3@127.0.0.1)3> rc_example:ring_status().
 ```
 
 Try the key/value commands:
@@ -96,14 +112,14 @@ Basho, the company that originally developed Riak and Riak Core was
 put into receivership in 2017. This introduces some uncertainty about the
 future of these products, although the community has shown interest in
 taking over their maintenance. At the moment of writing,
-the [riak_core_ng](https://github.com/Kyorai/riak_core) fork seems to
-be the most actively maintained fork of Riak Core and hopefully the work being
+the [riak_core_ng](https://github.com/Kyorai/riak_core) fork is
+the most actively maintained fork of Riak Core and hopefully the work being
 done there will eventually be merged back to the canonical repository.
 
 As part of our interest in this technology and our intention to use it
 in new projects we had to struggle a bit with scarce and outdated
 documenatation, stale dependencies, etc. The intention is thus to
-provide a tutorial on how to use Riak Core today, on an Erlang 20
+provide a tutorial on how to use Riak Core today, on an Erlang 21
 and rebar3 project, with minimal dependencies and operational
 sugar. You'll notice the structure borrows heavily from
 the
@@ -126,11 +142,14 @@ series, which were our main references.
   [Part III](https://medium.com/@GPad/create-a-riak-core-application-in-elixir-part-3-8bac36632be0),
   [Part IV](https://medium.com/@GPad/create-a-riak-core-application-in-elixir-part-4-728512ece224) and
   [Part V](https://medium.com/@GPad/create-a-riak-core-application-in-elixir-part-5-86cd9d2c6b92)
-* [A Gentle Introduction to Riak Core](http://efcasado.github.io/riak-core_intro/)
+* [A Gentle Introduction to Riak Core](http://efcasado.github.io/riak-core_intro)
 * Understanding Riak Core:
   [Handoff](http://basho.com/posts/technical/understanding-riak_core-handoff/),
-  [The visit fun](http://basho.com/posts/technical/understanding-riak_core-visitfun/) and
   [Building Handoff](http://basho.com/posts/technical/understanding-riak_core-building-handoff/)
+  and
+  [The visit fun](http://basho.com/posts/technical/understanding-riak_core-visitfun/)
+* [udon_ng](https://github.com/mrallen1/udon_ng) example application.
+
 
 ### 0. Riak Core overview
 
@@ -157,6 +176,12 @@ turn are evenly distributed across all available physical nodes.
 Note this distribution isn't fixed as the keyspace partitioning
 is: the vnode distribution can change if a physical node is added
 to the cluster or goes down.
+
+You can find a more detailed demonstration of consistent hashing [here](http://blog.carlosgaldino.com/consistent-hashing.html).
+
+This architecture enables several desirable properties in our system: high
+avalability, incremental scalability and decentralization, with a low operational
+cost. You can find a detailed discussion of these properties in the [Dynamo paper](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf).
 
 ### 1. Setup
 
@@ -188,44 +213,15 @@ riak_core dependency and lager, which we'll use for logging:
 
 ``` erlang
 {erl_opts, [debug_info, {parse_transform, lager_transform}]}.
-{deps, [{riak_core, "3.0.9", {pkg, riak_core_ng}}, {lager, "3.5.1"}]}.
+{deps, [{riak_core, "3.1.0", {pkg, riak_core_ng}}, {lager, "3.5.1"}]}.
 ```
 
-Note we're using
-the [`riak_core_ng` fork](https://hex.pm/packages/riak_core_ng), which is
-more up to date so it's easier to make it work with Erlang 20. If you
-go ahead and try to `rebar3 compile` your project, you'll notice it
-fails with this message:
-
-``` shell
-===> Compiling _build/default/lib/riak_ensemble/src/riak_ensemble_test.erl failed
-_build/default/lib/riak_ensemble/src/riak_ensemble_test.erl:21: export_all flag enabled - all functions will be exported
-```
-
-The issue here is that some of the dependencies of riak_core use
-the [warnings_as_errors option](http://erlang.org/doc/man/compile.html),
-and their code contains stuff
-that produces warnings in recent Erlang versions (namely, they use
-`export_all` or `gen_fsm`). To fix this we need to override their
-configuration in our rebar.config file, removing the `warnings_as_errors` option:
-
-``` erlang
-{overrides, [{override, riak_ensemble,
-              [{erl_opts, [debug_info,
-                           warn_untyped_record,
-                           {parse_transform, lager_transform}]}]},
-
-             {override, riak_core,
-              [{erl_opts, [{parse_transform, lager_transform},
-                           debug_info, {platform_define, "^[0-9]+", namespaced_types},
-                           {platform_define, "18", old_rand},
-                           {platform_define, "17", old_rand},
-                           {platform_define, "^R15", old_hash}]}]},
-
-             {override, poolboy,
-              [{erl_opts, [debug_info,
-                           {platform_define, "^[0-9]+", namespaced_types}]}]}]}
-```
+Note that we're using the
+[`riak_core_ng` fork](https://hex.pm/packages/riak_core_ng), which is
+more up to date. Version 3.1.0 introduced support for Erlang 20 and 21 (previously
+some work was required to avoid deprecation
+[warnings_as_errors](http://erlang.org/doc/man/compile.html)). At this point you
+should be able to compile your project running `rebar3 compile`.
 
 Now that the project compiles, let's try to build and run a
 release. First we need to add lager and riak_core to
@@ -274,7 +270,7 @@ ring file: "no such file or directory"`. We need to add some configuration to
   [{ring_state_dir, "./data/ring"},
    {web_port, 8098},
    {handoff_port, 8099},
-   {schema_dirs, ["priv"]}
+   {schema_dirs, ["lib/rc_example-0.1.0/priv"]}
   ]}].
 ```
 
@@ -336,11 +332,11 @@ init([Partition]) ->
     {ok, #{partition => Partition}}.
 
 handle_command(ping, _Sender, State = #{partition := Partition}) ->
-  lager:info("Received ping command ~p", [Partition]),
+  log("Received ping command ~p", [Partition], State),
   {reply, {pong, Partition}, State};
 
 handle_command(Message, _Sender, State) ->
-    lager:warning("unhandled_command ~p", [Message]),
+    log("unhandled_command ~p", [Message], State),
     {noreply, State}.
 
 ```
@@ -399,7 +395,22 @@ handle_exit(_Pid, _Reason, State) ->
 
 terminate(_Reason, _State) ->
     ok.
+
+%% internal
+
+%% same as lager:info but prepends the partition
+log(String, State) ->
+  log(String, [], State).
+
+log(String, Args, #{partition := Partition}) ->
+  String2 = "[~.36B] " ++ String,
+  Args2 = [Partition | Args],
+  lager:info(String2, Args2),
+  ok.
 ```
+
+We also added a small `log` helper that prepends the partition to all
+the vnode logs.
 
 #### Application and supervisor setup
 Before moving on we need to add some boilerplate code for riak_core to
@@ -448,8 +459,8 @@ public interface to our application:
 ping()->
   Key = os:timestamp(),
   DocIdx = hash_key(Key),
-  PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, rc_example),
-  [{IndexNode, _Type}] = PrefList,
+  PrefList = riak_core_apl:get_apl(DocIdx, 1, rc_example),
+  [IndexNode] = PrefList,
   Command = ping,
   riak_core_vnode_master:sync_spawn_command(IndexNode, Command, rc_example_vnode_master).
 
@@ -477,7 +488,7 @@ the first element is called the bucket, a value
 riak_core will use to namespace your keys; you can choose to have a
 single one per application, or many, according to your needs.
 
-The result of the hash is passed to `riak_core_apl:get_primary_apl`
+The result of the hash is passed to `riak_core_apl:get_apl`
 which returns an Active Preference List (APL) for the given key, this
 is a list of active vnodes that can handle that request. The amount of
 offered vnodes will be determined by the second argument of the
@@ -491,27 +502,22 @@ better sense of how they work:
 (rc_example@127.0.0.1)2> K1 = riak_core_util:chash_key({<<"rc_example">>, term_to_binary(os:timestamp())}).
 <<190,175,151,200,144,123,229,205,94,16,209,140,252,108,
   247,20,238,31,6,82>>
-(rc_example1@127.0.0.1)3> riak_core_apl:get_primary_apl(K1, 1, rc_example).
-[{{1096126227998177188652763624537212264741949407232,
-   'rc_example@127.0.0.1'},
-  primary}]
+(rc_example1@127.0.0.1)3> riak_core_apl:get_apl(K1, 1, rc_example).
+[{1096126227998177188652763624537212264741949407232,
+  'rc_example@127.0.0.1'}]
 (rc_example1@127.0.0.1)4> K2 = riak_core_util:chash_key({<<"rc_example">>, term_to_binary(os:timestamp())}).
 <<113,53,13,80,4,131,62,95,63,164,211,74,145,83,189,77,
   254,224,190,198>>
-(rc_example@127.0.0.1)5> riak_core_apl:get_primary_apl(K2, 1, rc_example).
-[{{662242929415565384811044689824565743281594433536,
-   'rc_example@127.0.0.1'},
-  primary}]
-(rc_example@127.0.0.1)6> riak_core_apl:get_primary_apl(K2, 3, rc_example).
-[{{662242929415565384811044689824565743281594433536,
-   'rc_example@127.0.0.1'},
-  primary},
- {{685078892498860742907977265335757665463718379520,
-   'rc_example@127.0.0.1'},
-  primary},
- {{707914855582156101004909840846949587645842325504,
-   'rc_example@127.0.0.1'},
-  primary}]
+(rc_example@127.0.0.1)5> riak_core_apl:get_apl(K2, 1, rc_example).
+[{662242929415565384811044689824565743281594433536,
+  'rc_example@127.0.0.1'}]
+(rc_example@127.0.0.1)6> riak_core_apl:get_apl(K2, 3, rc_example).
+[{662242929415565384811044689824565743281594433536,
+  'rc_example@127.0.0.1'},
+ {685078892498860742907977265335757665463718379520,
+  'rc_example@127.0.0.1'},
+ {707914855582156101004909840846949587645842325504,
+  'rc_example@127.0.0.1'}]
 ```
 
 We get different partitions every time, always on the same physical
@@ -673,7 +679,7 @@ $ make dev3
 
 If you try the `ring_status` function, you'll see something like:
 
-```
+```erlang
 (rc_example1@127.0.0.1)1> rc_example:ring_status().
 ==================================== Nodes ====================================
 Node a: 64 (100.0%) rc_example1@127.0.0.1
@@ -727,16 +733,16 @@ init([Partition]) ->
   {ok, #{partition => Partition, data => #{}}}.
 
 handle_command({put, Key, Value}, _Sender, State = #{data := Data}) ->
-  lager:info("PUT ~p:~p", [Key, Value]),
+  log("PUT ~p:~p", [Key, Value], State),
   NewData = Data#{Key => Value},
   {reply, ok, State#{data => NewData}};
 
 handle_command({get, Key}, _Sender, State = #{data := Data}) ->
-  lager:info("GET ~p", [Key]),
+  log("GET ~p", [Key], State),
   {reply, maps:get(Key, Data, not_found), State};
 
 handle_command({delete, Key}, _Sender, State = #{data := Data}) ->
-  lager:info("DELETE ~p", [Key]),
+  log("DELETE ~p", [Key], State),
   NewData = maps:remove(Key, Data),
   {reply, maps:get(Key, Data, not_found), State#{data => NewData}};
 ```
@@ -781,8 +787,8 @@ hash_key(Key) ->
 
 sync_command(Key, Command) ->
   DocIdx = hash_key(Key),
-  PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, rc_example),
-  [{IndexNode, _Type}] = PrefList,
+  PrefList = riak_core_apl:get_apl(DocIdx, 1, rc_example),
+  [IndexNode] = PrefList,
   riak_core_vnode_master:sync_spawn_command(IndexNode, Command, rc_example_vnode_master).
 ```
 
@@ -827,7 +833,220 @@ effort by just handling your application-specific logic in a vnode module.
 
 ### 5. Testing
 
-TODO #7
+Our application already has some basic functionality so we should
+start thinking about how to test it. This is a
+distributed system that requires multiple nodes to work and manual tests
+will become more difficult as it grows; moreover, since most of the
+complexity resides in the interaction of its components,
+we won't benefit much from isolated unit tests, instead we should
+write an integration suite that provides end-to-end verification of each
+feature. To accomplish that we will use
+[Common Tests](http://erlang.org/doc/apps/common_test/basics_chapter.html),
+and a combination of
+[ct_slave](http://erlang.org/doc/man/ct_slave.html)
+and [rpc](http://erlang.org/doc/man/rpc.html) to start multiple nodes
+and interact with them.
+
+#### Test implementations
+
+To start off, let's add a new make target that runs the tests with
+rebar3 (remember to add it in the .PHONY targets):
+
+``` makefile
+.PHONY: dev1 dev2 dev3 dev4 clean_data test
+
+test:
+	./rebar3 ct --name test@127.0.0.1
+```
+
+Now create a test directory with a single module
+`test/key_value_SUITE.erl`:
+
+``` erlang
+-module(key_value_SUITE).
+
+-include_lib("common_test/include/ct.hrl").
+
+-compile(export_all).
+
+all() ->
+  [ping_test,
+   key_value_test].
+
+init_per_suite(Config) ->
+  Node1 = 'node1@127.0.0.1',
+  Node2 = 'node2@127.0.0.1',
+  Node3 = 'node3@127.0.0.1',
+  start_node(Node1, 8198, 8199),
+  start_node(Node2, 8298, 8299),
+  start_node(Node3, 8398, 8399),
+
+  build_cluster(Node1, Node2, Node3),
+
+  [{node1, Node1},
+   {node2, Node2},
+   {node3, Node3} | Config].
+
+end_per_suite(Config) ->
+  Node1 = ?config(node1, Config),
+  Node2 = ?config(node2, Config),
+  Node3 = ?config(node3, Config),
+  stop_node(Node1),
+  stop_node(Node2),
+  stop_node(Node3),
+  ok.
+```
+
+We include the ct header file and declare two tests in the `all()`
+callback, which we'll define shortly. In `init_per_suite`
+ we create three nodes using the `start_node` helper, and make them
+ join a cluster with `build_cluster`; we keep the node names in the
+ test configuration so we can later use it to remotely execute
+ functions in those nodes; finally we stop the nodes in
+    `end_per_suite` using another helper. We'll leave the
+ implementations, which contain most of the ct_slave magic, for the end
+ of this section. Now let's focus in the tests:
+
+ ```erlang
+ping_test(Config) ->
+  Node1 = ?config(node1, Config),
+  Node2 = ?config(node2, Config),
+  Node3 = ?config(node3, Config),
+
+  {pong, _Partition1} = rc_command(Node1, ping),
+  {pong, _Partition2} = rc_command(Node2, ping),
+  {pong, _Partition3} = rc_command(Node3, ping),
+
+  ok.
+
+key_value_test(Config) ->
+  Node1 = ?config(node1, Config),
+  Node2 = ?config(node2, Config),
+  Node3 = ?config(node3, Config),
+
+  ok = rc_command(Node1, put, [k1, v1]),
+  ok = rc_command(Node1, put, [k2, v2]),
+  ok = rc_command(Node1, put, [k3, v3]),
+
+  %% get from any of the nodes
+  v1 = rc_command(Node1, get, [k1]),
+  v2 = rc_command(Node1, get, [k2]),
+  v3 = rc_command(Node1, get, [k3]),
+  not_found = rc_command(Node1, get, [k10]),
+
+  v1 = rc_command(Node2, get, [k1]),
+  v2 = rc_command(Node2, get, [k2]),
+  v3 = rc_command(Node2, get, [k3]),
+  not_found = rc_command(Node2, get, [k10]),
+
+  v1 = rc_command(Node3, get, [k1]),
+  v2 = rc_command(Node3, get, [k2]),
+  v3 = rc_command(Node3, get, [k3]),
+  not_found = rc_command(Node3, get, [k10]),
+
+  %% test reset and delete
+  ok = rc_command(Node1, put, [k1, v_new]),
+  v_new = rc_command(Node1, get, [k1]),
+
+  v_new = rc_command(Node1, delete, [k1]),
+  not_found = rc_command(Node1, get, [k1]),
+
+  ok = rc_command(Node1, put, [k1, v_new]),
+  v_new = rc_command(Node1, get, [k1]),
+
+  ok.
+ ```
+
+The `ping_test` just sends a `ping` command to each of the nodes, and
+makes sure it gets a `pong` response every time. Note we use an
+`rc_command` helper, which executes a command of our rc_example
+application in the given node. The `key_value_test` puts some keys in
+the store through the first node, then makes sure those keys can be
+retrieved from any of the nodes (regardless of where they are actually
+stored), then it tests the delete command and makes sure the store
+generally works as expected.
+
+There's nothing special about these tests when we abstract away the
+details of setting up the nodes and the riak_core cluster.
+
+#### ct_slave magic
+
+Let's look at the implementation of the different helpers we used in the
+previous section. We need the `start_node` helper to
+create a new Erlang node with a given name, and we need it to start our
+rc_example application, much like what happens when we run our
+development releases; for this to work we should also set up the
+required riak_core application environment:
+
+
+``` erlang
+start_node(NodeName, WebPort, HandoffPort) ->
+  %% need to set the code path so the same modules are available in the slave
+  CodePath = code:get_path(),
+  PathFlag = "-pa " ++ lists:concat(lists:join(" ", CodePath)),
+  {ok, _} = ct_slave:start(NodeName, [{erl_flags, PathFlag}]),
+
+  %% set the required environment for riak core
+  DataDir = "./data/" ++ atom_to_list(NodeName),
+  rpc:call(NodeName, application, load, [riak_core]),
+  rpc:call(NodeName, application, set_env, [riak_core, ring_state_dir, DataDir]),
+  rpc:call(NodeName, application, set_env, [riak_core, platform_data_dir, DataDir]),
+  rpc:call(NodeName, application, set_env, [riak_core, web_port, WebPort]),
+  rpc:call(NodeName, application, set_env, [riak_core, handoff_port, HandoffPort]),
+  rpc:call(NodeName, application, set_env, [riak_core, schema_dirs, ["../../lib/rc_example/priv"]]),
+
+  %% start the rc_example app
+  {ok, _} = rpc:call(NodeName, application, ensure_all_started, [rc_example]),
+
+  ok.
+
+stop_node(NodeName) ->
+  ct_slave:stop(NodeName).
+```
+
+ct_slave makes it pretty simple to manage erlang nodes with the
+[`ct_slave:start`](http://erlang.org/doc/man/ct_slave.html#start-2)
+and [`ct_slave:stop`](http://erlang.org/doc/man/ct_slave.html#stop-1)
+functions. The gotcha is that when we start a new node we need to
+point the code path to Erlang, in order for the node to know where to
+look for code dependencies. The best way I've found to do it, based on
+[this thread](http://erlang.org/pipermail/erlang-questions/2016-March/088428.html),
+is to get the path from the master node that runs the test, and pass
+it to Erlang with the `-pa` flag. There is probably
+a more succint way to do this, for example using `code:set_path`, but
+I couldn't make it work.
+
+Once the node is up, we can start running functions on it with
+[`rpc:call`](http://erlang.org/doc/man/rpc.html#call-4). In order for
+riak_core to work, we need to load the
+application and fill its environment with `application:set_env`; we
+set the same variables as we did in `conf/sys.config`, with the addition of
+`platform_data_dir` (this is a directory that riak_core uses to store
+metadata; we need to set it explicitly here because otherwise the
+three nodes would conflict trying to write in the same default directory). With
+the configuration in place, we can start the rc_example app remotely
+calling `application:ensure_all_started`. Lastly, the `stop_node`
+helper just needs to call `ct_slave:stop`.
+
+When our three nodes are up with the application running, we need to
+connect them to build the cluster, like we did from the shell:
+
+``` erlang
+build_cluster(Node1, Node2, Node3) ->
+  rpc:call(Node2, riak_core, join, [Node1]),
+  rpc:call(Node3, riak_core, join, [Node1]),
+  ok.
+```
+
+The last helper, `rc_command`, is a very simple one, it just remotely
+calls one of the functions in the `rc_example` module:
+
+``` erlang
+rc_command(Node, Command) ->
+  rc_command(Node, Command, []).
+rc_command(Node, Command, Arguments) ->
+  rpc:call(Node, rc_example, Command, Arguments).
+```
 
 ### 6. Coverage commands
 
@@ -848,20 +1067,20 @@ In this section we're going to implement two new commands: `keys` and
 `values`, which as you may guess return the list of keys and values
 currently present in the datastore.
 
-#### handle coverage on the vnode
+#### Handle coverage commands in the vnode
 
 The vnode is the easy part. Each vnode just needs to return the list
 of Keys or Values it contains in the `data` field of its state. This
-is done in the `handle_coverage` command:
+is done in the `handle_coverage` callback:
 
 ``` erlang
 handle_coverage(keys, _KeySpaces, {_, ReqId, _}, State = #{data := Data}) ->
-  lager:info("Received keys coverage"),
+  log("Received keys coverage", State),
   Keys = maps:keys(Data),
   {reply, {ReqId, Keys}, State};
 
 handle_coverage(values, _KeySpaces, {_, ReqId, _}, State = #{data := Data}) ->
-  lager:info("Received values coverage"),
+  log("Received values coverage", State),
   Values = maps:values(Data),
   {reply, {ReqId, Values}, State}.
 ```
@@ -870,9 +1089,8 @@ handle_coverage(values, _KeySpaces, {_, ReqId, _}, State = #{data := Data}) ->
 We need to introduce a new component, the one that will be in charge
 of managing the coverage command, that is of starting it and gathering
 the results sent from each of the vnodes. riak_core provides the
-`riak_core_coverage_fsm` behavior for this purpose.
-
-Let's create a `src/rc_example_coverage_fsm.erl` module implementing
+`riak_core_coverage_fsm` behavior for this purpose (a finite state
+machine). Let's create a `src/rc_example_coverage_fsm.erl` module implementing
 that behavior and go over each of its functions:
 
 ``` erlang
@@ -891,7 +1109,7 @@ start_link(ReqId, ClientPid, Request, Timeout) ->
 ```
 
 So far, nothing very special: the start_link will be called by a
-supervisore (see next section) to start the process, and the
+supervisor to start the process (see next section) and the
 parameters are more or less forwarded to
 `riak_core_coverage_fsm:start_link`.
 
@@ -904,38 +1122,33 @@ init({pid, ReqId, ClientPid}, [Request, Timeout]) ->
             request => Request,
             accum => []},
 
-  {Request, allup, 1, 1, rc_example, %% service to use to check for available nodes
-   rc_example_vnode_master, %% The atom to use to reach the vnode master module
-   Timeout,
-   %% coverage plan was added in the _ng fork
-   %% https://github.com/Kyorai/riak_core/commit/3826e3335ab3fe0008b418c4ece17845bcf1d4dc#diff-638fdfff08e818d2858d8b9d8d290c5f
-   riak_core_coverage_plan, %%  The module which defines create_plan
-   State}.
+  {Request, allup, 1, 1, rc_example, rc_example_vnode_master, Timeout,
+   riak_core_coverage_plan, State}.
 ```
 
 In `init`, we initialize the process state as usual. We create a state
 map where we put request metadata, the client process id (so we can
-later reply with the result of the command) and an accumulator list
+later reply to it with the result of the command) and an accumulator list
 that we will update with the results coming from each vnode.
 
 `init` returns a big tuple with a bunch of parameters that control how
-the coverage command should work. Let's briefly explain what each of
-them is (mostly taken from
+the coverage command should work. Let's briefly explain each of
+them (mostly taken from
 [here](https://github.com/Kyorai/riak_core/blob/3.0.9/src/riak_core_coverage_fsm.erl#L45-L63);
 you'll have to dig around for more details):
 
 * Request: an opaque data structure representing the command to be
-  handled by the vnodes. In our case it will just be either of the `keys` or
+  handled by the vnodes. In our case it will be either of the `keys` or
   `values` atoms.
 * VNodeSelector: an atom that specifies whether we want to run the
-  command in all vnodes (`all`) or only those reachable (`allup`).
+  command in all vnodes (`all`) or only in those reachable (`allup`).
 * ReplicationFactor: used to accurately create a minimal covering set
   of vnodes.
 * PrimaryVNodeCoverage: The number of primary VNodes from the
   preference list to use in creating the coverage plan. Typically just
   1.
-* NodeCheckService: the service to use to check for available
-  nodes. AFAIK this is the same as the atom passed to the node_watcher
+* NodeCheckService: the service used to check for available
+  nodes. This is the same as the atom passed to the node_watcher
   at application startup.
 * VNodeMaster: The atom to use to reach the vnode master module (`rc_example_vnode_master`).
 * Timeout: timeout of the coverage request.
@@ -944,27 +1157,738 @@ you'll have to dig around for more details):
   command. This will usually be `riak_core_coverage_plan`.
 * State: the initial state for the module.
 
-Note that the PlannerMode argument was [introduced in the `riak_core_ng`
+Note that the PlannerMod argument was [introduced in the `riak_core_ng`
 fork](https://github.com/Kyorai/riak_core/commit/3826e3335ab3fe0008b418c4ece17845bcf1d4dc#diff-638fdfff08e818d2858d8b9d8d290c5f) and
 isn't present in the original basho codebase (thus, if you
 are using an older riak_core version you should omit that parameter).
 
-#### supervision
-* add new supervisor, add to global supervisor
-* explain run/start_fsm api
+``` erlang
+process_results({{_ReqId, {_Partition, _Node}}, []}, State ) ->
+  {done, State};
+
+process_results({{_ReqId, {Partition, Node}}, Data},
+                State = #{accum := Accum}) ->
+  NewAccum = [{Partition, Node, Data} | Accum],
+  {done, State#{accum => NewAccum}}.
+```
+
+The `process_results` callback gets called when the coverage module
+receives a set of results from a vnode. For our `keys` and `values`
+commands we store the partition
+and node identifiers along with the data, so we can see where each
+piece came from in the final result. Since in our
+tests most of the vnodes will be empty, we filter them out
+by handling the empty list case in a separate `process_results` clause
+that leaves the accumulator unchanged.
+
+``` erlang
+finish(clean, State = #{req_id := ReqId, from := From, accum := Accum}) ->
+  lager:info("Finished coverage request ~p", [ReqId]),
+
+  %% send the result back to the caller
+  From ! {ReqId, {ok, Accum}},
+  {stop, normal, State};
+
+finish({error, Reason}, State = #{req_id := ReqId, from := From, accum := Accum}) ->
+  lager:warning("Coverage query failed! Reason: ~p", [Reason]),
+  From ! {ReqId, {partial, Reason, Accum}},
+  {stop, normal, State}.
+```
+
+Finally, the `finish` function will be called when the coverage
+command is done. If it goes well, the first argument will be `clean`;
+in that case we reply the accumulated data to the caller Pid (stored
+in `from`). If there's an error we handle it in the second `finish` clause.
+
+#### Coverage FSM Supervision
+
+We need to supervise our `rc_example_coverage_fsm` processes. Since
+these are created on demand, one per each command that needs
+to be executed, we are going to use the `simple_one_for_one`
+[supervisor strategy](http://erlang.org/doc/man/supervisor.html). Create a
+`src/rc_example_coverage_fsm_sup.erl` module:
+
+``` erlang
+-module(rc_example_coverage_fsm_sup).
+
+-behavior(supervisor).
+
+-export([start_link/0,
+         start_fsm/1,
+         init/1]).
+
+start_link() ->
+  supervisor:start_link({local, ?MODULE}, ?MODULE, []).
+
+init([]) ->
+  CoverageFSM = {undefined,
+                 {rc_example_coverage_fsm, start_link, []},
+                 temporary, 5000, worker, [rc_example_coverage_fsm]},
+
+  {ok, {{simple_one_for_one, 10, 10}, [CoverageFSM]}}.
+
+start_fsm(Args) ->
+  supervisor:start_child(?MODULE, Args).
+```
+
+When a coverage command needs to be executed, `start_fsm` is
+called to create a new child of this supervisor.
+
+We also need to add `rc_example_coverage_fsm_sup` to the main
+application supervisor in `src/rc_example_sup.erl`:
+
+``` erlang
+init([]) ->
+  VMaster = {rc_example_vnode_master,
+             {riak_core_vnode_master, start_link, [rc_example_vnode]},
+             permanent, 5000, worker, [riak_core_vnode_master]},
+
+  CoverageFSM = {rc_example_coverage_fsm_sup,
+                 {rc_example_coverage_fsm_sup, start_link, []},
+                 permanent, infinity, supervisor, [rc_example_coverage_fsm_sup]},
+
+  {ok, {{one_for_one, 5, 10}, [VMaster, CoverageFSM]}}.
+```
 
 #### Putting it all together
 
-* add keys, values and coverage helper
-* run in shell
+Now that we have all the components in place, let's add the `keys` and
+`values` functions to `src/rc_example.erl`:
 
-#### testing
-TODO
+``` erlang
+keys() ->
+  coverage_command(keys).
 
-### 7. Handoff
+values() ->
+  coverage_command(values).
 
-explain what we've learned digging the code comments
+%% internal
 
-### 8. Redundancy and fault-tolerance
+coverage_command(Command) ->
+  Timeout = 5000,
+  ReqId = erlang:phash2(erlang:monotonic_time()),
+  {ok, _} = rc_example_coverage_fsm_sup:start_fsm([ReqId, self(), Command, Timeout]),
 
-TODO #6
+  receive
+    {ReqId, Val} -> Val
+  end.
+```
+
+We create a ReqId to identify the request and call
+`rc_example_coverage_fsm_sup:start_fsm` to create a new child for the
+supervisor, passing all the parameters the `rc_example_coverage_fsm`
+needs to execute the command. Finally, we receive the result value,
+identified by the ReqId.
+
+Restart your releases, fill the store with some values and try the new
+commands:
+
+``` erlang
+(rc_example1@127.0.0.1)1> rc_example:put(k1, v1).
+ok
+(rc_example1@127.0.0.1)2> rc_example:put(k100, v100).
+12:17:25.001 [info] [RKFE4TBE76PR5N05XGK31C8TPLJGJY8] PUT k100:v100
+ok
+(rc_example1@127.0.0.1)3> rc_example:put(k101, v101).
+ok
+(rc_example1@127.0.0.1)4> rc_example:put(k444, v444).
+ok
+(rc_example1@127.0.0.1)5> rc_example:put(k4445, v4445).
+ok
+(rc_example1@127.0.0.1)6> rc_example:keys().
+12:17:45.916 [info] Starting coverage request 63138856 keys
+12:17:45.921 [info] [RKFE4TBE76PR5N05XGK31C8TPLJGJY8] Received keys coverage
+12:17:45.921 [info] [TFPL6YYQR76578P6XWBOLKEAZ9KS1S0] Received keys coverage
+12:17:45.921 [info] [0] Received keys coverage
+12:17:45.921 [info] [S18XWCQ8C6TUO1FF6KHZFEA710JSFEO] Received keys coverage
+12:17:45.921 [info] [IOTYLKHHK4JWG0YA4DNZM9ISOOD6Y9S] Received keys coverage
+(...)
+{ok,[{707914855582156101004909840846949587645842325504,
+      'rc_example3@127.0.0.1',
+      [k101]},
+     {1141798154164767904846628775559596109106197299200,
+      'rc_example2@127.0.0.1',
+      [k1]},
+     {890602560248518965780370444936484965102833893376,
+      'rc_example3@127.0.0.1',
+      [k444]},
+     {981946412581700398168100746981252653831329677312,
+      'rc_example3@127.0.0.1',
+      [k4445]},
+     {1347321821914426127719021955160323408745312813056,
+      'rc_example1@127.0.0.1',
+      [k100]}]}
+```
+
+As expected, the result contains all the inserted keys and what vnode
+and physical node they come from. We also see the `received keys
+coverage` output from every vnode when they receive the command.
+
+#### Coverage test
+
+We need to test our new functionality. Before writing an
+integration test, let's quickly add a `clear` coverage command to
+empty our database, which will come in handy next. Add a new
+`handle_coverage` clause in `src/rc_example_vnode.erl`:
+
+``` erlang
+handle_coverage(clear, _KeySpaces, {_, ReqId, _}, State) ->
+  log("Received clear coverage", State),
+  NewState = State#{data => #{}},
+  {reply, {ReqId, []}, NewState}.
+```
+
+When the `clear` command is received, the vnode will empty the data
+map in its internal state. Note we return an empty list because our
+coverage fsm expects to get a list from each vnode; if the new command
+required a different result manipulation we could consider adding a another
+`process_results` clause in the fsm or even an entirely separate fsm
+module; in this case we don't really care about results processing,
+just the side effect of clearing the vnode data.
+
+We will also add the `clear` function to the public API in
+`src/rc_example.erl`. It will just call `coverage_command` and return `ok`.
+
+``` erlang
+-export([clear/0]).
+
+clear() ->
+  {ok, []} = coverage_command(clear),
+  ok.
+```
+
+With that in place let's test our coverage commands in
+`test/key_value_SUITE.erl`:
+
+``` erlang
+all() ->
+  [ping_test,
+   key_value_test,
+   coverage_test].
+
+%% ...
+
+coverage_test(Config) ->
+  Node1 = ?config(node1, Config),
+  Node2 = ?config(node2, Config),
+
+  %% clear, should contain no keys and no values
+  ok = rc_command(Node1, clear),
+  [] = rc_coverage(Node1, keys),
+  [] = rc_coverage(Node1, values),
+
+  ToKey = fun (N) -> "key" ++ integer_to_list(N) end,
+  ToValue = fun (N) -> "value" ++ integer_to_list(N) end,
+  Range = lists:seq(1, 100),
+  lists:foreach(fun(N) ->
+                    ok = rc_command(Node1, put, [ToKey(N), ToValue(N)])
+                end, Range),
+
+  ActualKeys = rc_coverage(Node2, keys),
+  ActualValues = rc_coverage(Node2, values),
+
+  100 = length(ActualKeys),
+  100 = length(ActualValues),
+
+  true = have_same_elements(ActualKeys, lists:map(ToKey, Range)),
+  true = have_same_elements(ActualValues, lists:map(ToValue, Range)),
+
+  %% store should be empty after a new clear
+  ok = rc_command(Node1, clear),
+  [] = rc_coverage(Node1, keys),
+  [] = rc_coverage(Node1, values),
+
+  ok.
+
+%% internal
+rc_coverage(Node, Command) ->
+  {ok, List} = rc_command(Node, Command),
+  %% convert the coverage result to a plain list
+  lists:foldl(fun({_Partition, _Node, Values}, Accum) ->
+                  lists:append(Accum, Values)
+              end, [], List).
+
+have_same_elements(List1, List2) ->
+  S1 = sets:from_list(List1),
+  S2 = sets:from_list(List2),
+  sets:is_subset(S1, S2) andalso sets:is_subset(S2, S1).
+```
+
+The `coverage_test` first calls `clear` to empty the store, and makes
+sure `keys` and `values` return an empty result. Note that our
+integration suite is not ideal in the sense that the tests are not
+isolated from each other: they share the same data store and they
+couldn't, for example, be run concurrently. In a real world
+project we could consider creating new nodes for each test
+(although this could be slow) or more likely introduce some sort of
+namespacing in our data store (perhaps through the use of buckets). For
+the purposes of this tutorial, though, it's enough to clear the store
+in this particular test.
+
+The test continues by storing a range of 100 keys and values in our
+database and calling the `keys` and `values` commands. We assert that
+the results contain 100 elements each and we use some sets logic to check that
+the elements are the same that we originally inserted. Finally, we
+clear the store again and check `keys` and `values` come back
+empty. The `rc_coverage` helper just calls a command and cleans the
+result by removing the partition and node annotations.
+
+### 7. Redundancy and fault-tolerance
+
+In the non-ideal world of distributed systems we need to account for
+the fact that software and hardware can fail and that networks are
+unreliable. In other words, we need to build our distributed system such that it
+keeps functioning when one or more of the nodes becomes
+unavailable. riak_core provides some useful building blocks to achieve
+it: it will monitor the cluster, redistribute partitions when
+nodes go down and even expose a mechanism to move data
+around when they come back online (see [handoff](#8-handoff)). But
+some of the work will be implementation specific.
+
+If your system works as a distributed database, that is if your
+vnodes hold state that should survive node outages, then you'll have
+to replicate each piece of data to multiple vnodes, so a fallback vnode
+can take over when the primary is not available. In our Key/Value
+store example, this means that `put` commands should
+be sent to multiple vnodes to replicate the data, and `delete` commands
+should be sent to all the replicas. This is introduces room for a lot
+of design decisions, each with their own tradeoffs:
+* How many physical nodes should a cluster consist of?
+* How many replicas of each key should be stored?
+* How many successful responses are required for a write operation to succeed?
+* How many to read data?
+* How to handle write conflicts between replicas?
+* etc.
+
+
+These are more related to database design and tuning than to
+riak_core itself; riak_core is about distribution mechanics, so we
+won't go too fair into the specifics here. For the sake of
+completeness, let's briefly mention how the riak_core
+API allows us to introduce redundancy. If you review the
+`src/rc_example.erl` module, you'll recal that we use
+`:riak_core_apl.get_apl` to obtain a list of vnodes that can handle a
+given command; let's say we want to replicate our data to three nodes,
+then we can request for that amount:
+
+``` erlang
+(rc_example1@127.0.0.1)2> K = riak_core_util:chash_key({<<"rc_example">>, term_to_binary(os:timestamp())}).
+(rc_example1@127.0.0.1)3> riak_core_apl:get_apl(K, 3, rc_example).
+[{1073290264914881830555831049026020342559825461248,
+  'rc_example1@127.0.0.1'},
+ {1096126227998177188652763624537212264741949407232,
+  'rc_example1@127.0.0.1'},
+ {1118962191081472546749696200048404186924073353216,
+  'rc_example2@127.0.0.1'}]
+```
+
+Then to actually send a command, instead of using
+`riak_core_vnode_master:sync_spawn_command`, we turn to the more
+generic `riak_core_vnode_master:command` which takes a Preference List
+instead of a single target vnode:
+
+``` erlang
+replicated_command(Key, Command) ->
+  DocIdx = hash_key(Key),
+  PrefList = riak_core_apl:get_apl(DocIdx, 3, rc_example),
+
+  ReqId = erlang:phash2(erlang:monotonic_time()),
+  Sender = {raw, ReqId, self()},
+  riak_core_vnode_master:command(PrefList, Command, Sender, rc_example_vnode_master),
+  receive
+    {ReqId, Reply} -> Reply
+  end.
+```
+
+Note we need to create a request id and pass the current process in
+the `Sender` argument so riak_core knows where to send the reply to.
+In this case, for demonstration purposes, we just do a blocking
+`receive` and return the first message that arrives; a more serious
+implementation could use a gen_server or a fsm to gather the responses
+and achieve some sort of quorum. If you are interested in the
+  topic, you can review the
+  [Little Riiak Core book](https://marianoguerra.github.io/little-riak-core-book/tolerating-node-failures.html#quorum-based-writes-and-deletes) and
+  the
+  [Elixir series](https://medium.com/@GPad/create-a-riak-core-application-in-elixir-part-5-86cd9d2c6b92),
+  both of which implement solutions to this problem.
+
+### 8. Handoff
+
+Part of the strength of the Dynamo architectures (and thus, of Riak Core) is
+how it enables scalability with small operational effort. Because
+the keyspace is designed as a ring of virtual nodes, adding or
+removing physical nodes to a cluster means changing the distribution
+of the vnodes across the physical nodes: a vnode will always handle
+the same segment of the keyspace (the same chunk of the key hashes),
+but where does that vnode resides physycally can change.
+
+For example: if we have a one-node cluster, it will necessarily
+contain the entire ring, that is all of the vnodes. If we start a second
+physical node and join that cluster, half of the vnodes will be "handed
+over" to the new physical node, so the keyspace is kept evenly
+distributed across the cluster.
+
+Riak Core provides the necessary infrastructure to decide where and
+when a vnode needs to be moved. We only need to fill in the
+specifics of how to iterate over our particualr vnodes' state, encode it in the
+giving end, and decode it in the receiving vnode. This process is
+called handoff. We'll go over all the required steps to support this scenario in our
+application. For a walkthrough of how handoff is implemented internally,
+check
+[the riak_core wiki](https://github.com/basho/riak_core/wiki/Handoffs).
+
+Note that if your vnodes are "stateless", for example if you just use
+riak_core as a mechanism to distribute work and don't need to keep
+internal state, you don't need to worry about handoff and can just
+leave the related callbacks empty.
+
+#### When does handoff occur?
+* An `ownership` handoff happens when a physical node joins or leaves
+the cluster. In this scenario, riak_core reassigns the physical nodes
+responsible for each vnode and it executes the handoff to move the
+vnode data from its old home to its new home.
+* `hinted` handoffs can occur if there's vnode redundancy (see
+  previous section). When the primary vnode for a particular part of
+  the ring is offline, riak_core still accepts operations on it and
+  routes those to a secondary vnode. When the primary vnode comes back
+  online, riak_core uses handoff to sync the current vnode state from
+  the secondary to the primary. Once the primary is synchronized,
+  operations are routed to it once again.
+
+There are also `repair` and `resize` related handoffs, which are a advanced
+topics that we won't cover. You can read about
+them
+[here](http://basho.com/posts/technical/understanding-riak_core-handoff/),
+[here](https://github.com/rzezeski/try-try-try/tree/master/2011/riak-core-conflict-resolution) and [here](https://github.com/basho/riak_core/commit/036e409eb83903315dd43a37c7a93c9256863807).
+
+#### Vnode implementation
+If you check our vnode implementation, you'll notice that half of the
+callbacks deal with handoff. Let's go over their
+implementation, in the same order as they are called.
+
+First, we need to include the `riak_core_vnode` header file, because
+we will refer to a macro defined there:
+
+``` erlang
+-include_lib("riak_core/include/riak_core_vnode.hrl").
+```
+
+`handoff_starting` is called on the sending vnode before the handoff
+begins. If the function returns true, the handoff will proceed through
+the normal path. If it returns false, the handoff will be
+cancelled. We don't need any special action here, so we just log and
+move forward:
+
+``` erlang
+handoff_starting(_TargetNode, State) ->
+  log("starting handoff", State),
+  {true, State}.
+```
+
+`handoff_cancelled` is called on the sending vnode in case the process
+is cancelled (usually explcitly by an admin tool). Again, we just log:
+
+``` erlang
+handoff_cancelled(State) ->
+  log("handoff cancelled", State),
+  {ok, State}.
+```
+
+`is_empty` should return a boolean informing if there's any data to
+migrate in the vnode; if there's not handoff is finished (calling `handoff_finished`).
+
+``` erlang
+is_empty(State = #{data := Data}) ->
+  IsEmpty = maps:size(Data) == 0,
+  {IsEmpty, State}.
+```
+
+The bulk of the work is done in the `handle_handoff_command`
+callback. This function can be a bit confusing, because it serves
+two different purposes depending on its calling arguments: to handle the
+request to fold over the vnode's data that needs to be transferred,
+and to handle regular vnode commands (e.g. `ping`, `put`, etc.) that arrive
+during handoff (and would otherwise be passed to `handle_command`).
+
+Let's focus on the first of those cases. riak_core knows what it needs
+to do with each piece of data the vnode holds (encode it, transfer it
+over the network to the new vnode and decode it there), but not what that data
+looks like or how it's stored (in our case Key/Value pairs on a map),
+so it gives us a function that encapsulates the processing and we need
+to apply it to our data:
+
+``` erlang
+handle_handoff_command(?FOLD_REQ{foldfun=FoldFun, acc0=Acc0}, _Sender,
+                       State = #{data := Data}) ->
+  log("Received fold request for handoff", State),
+  Result = maps:fold(FoldFun, Acc0, Data),
+  {reply, Result, State};
+```
+
+Nevermind the weird macro wrapper: `?FOLD_REQ` is just a record and we
+only care to extract the fold function (FoldFun) and the initial
+accumulator (Acc0). When a command with this shape arrives, we
+iterate over our vnodes' data, applying the given fold function. Note
+that the this function expects to be passed three arguments: key, value,
+and accumulator. This means that if your data structure doesn't
+already support this form of fold function you'll have to wrap it; in
+our case we just need to call `maps:fold/3` since our data is a
+map. The result of the fold is included in the `reply` tuple.
+
+FoldFun is synchronous and in our case the result
+of the command is replied right away, but there's also the option to
+return an `async` tuple; you can check
+[riak_kv](https://github.com/basho/riak_kv/blob/develop/src/riak_kv_vnode.erl#L1997-L2011) and
+[riak_search](https://github.com/basho/riak_search/blob/develop/src/riak_search_vnode.erl#L178-L194) implementations
+for reference. Note that if you go down this route, you may need to handle incoming commands that
+modify your vnodes' data while you are iterating over it.
+
+The second situation in which `handle_handoff_command` can be called
+is when a regular command arrives during handoff. If you check the
+[callback specification](https://github.com/Kyorai/riak_core/blob/3.0.9/src/riak_core_vnode.erl#L104-L110) you'll
+see that the result can be the same as in `handle_command`, with two
+additional return types: `forward` and `drop`. The forward reply will
+send the request to the target node, while the drop reply
+signifies that you won't even attempt to fulfill it. Which one to use
+depends on your application and the nature of the command.
+
+Let's reason about the possible situations in the case of our
+Key/Value store. When a `handle_handoff_command` arrives we can't tell
+if handoff has just started or is about to finish; we can't tell if
+the value associated with the command's key has been migrated to the
+receiving vnode already or the only copy is in this one. So the strategy we can
+take to stay consistent and avoid unnecessary effort is: when the
+command is a write (a `put` or a `delete`), we change our local copy
+of the code _and_ we forward it to the receiving vnode (that way, if it
+was already migrated, the change is applied in that copy too); if the
+command is read (a `get`), we reply with our local copy of the data
+(we know it's up to date because we applied all the writes
+locally). Let's see how this looks in the code:
+
+``` erlang
+handle_handoff_command({get, Key}, Sender, State) ->
+  log("GET during handoff, handling locally ~p", [Key], State),
+  handle_command({get, Key}, Sender, State);
+
+handle_handoff_command(Message, Sender, State) ->
+  {reply, _Result, NewState} = handle_command(Message, Sender, State),
+  {forward, NewState}.
+```
+
+We added extra `handle_handoff_command` clauses for each of those
+cases. The first one handles `get`, a read operation; the
+implementation just calls `handle_command` since we
+want to reply with the local copy of the data, as usual.
+
+The second clause catches the rest of the commands, `put` and
+`delete`, which are write operations. In these cases we call
+`handle_command` as well, to modify our local copy of the data, but
+instead of using the result, we return `forward`, so the command is
+sent to the receiving vnode as well.
+
+That's it for `handle_handoff_command`. For a deeper understanding of
+the different  scenarios we suggest checking [this](https://github.com/Kyorai/riak_core/blob/faf04f4820aff5bc876f79609fa838e1c86c0fb0/src/riak_core_vnode.erl#L312-L339) and [this](https://github.com/basho/riak_kv/blob/d5cfe62d8f0ff36ead2019bde7a08cdd33fd3764/src/riak_kv_vnode.erl#L974-L984) comments, along with the
+relevant code.
+
+Moving on to the remaining callbacks. `encode_handoff_item` is called
+on the sending vnode, each time a Key/Value pair is about to be sent
+over the wire; we use `term_to_binary` to encode it. On the other end,
+`handle_handoff_data` will be called on the receiving vnode to decode
+the Key and Value; we use `binary_to_term` and update the data
+map with the new pair:
+
+``` erlang
+encode_handoff_item(Key, Value) ->
+  erlang:term_to_binary({Key, Value}).
+
+handle_handoff_data(BinData, State = #{data := Data}) ->
+  {Key, Value} = erlang:binary_to_term(BinData),
+  log("received handoff data ~p", [{Key, Value}], State),
+  NewData = Data#{Key => Value},
+  {reply, ok, State#{data => NewData}}.
+```
+
+Finally, when handoff is done `handoff_finished` is called. After
+that, the sending vnode should be deleted; any necessary cleanup can
+be done in the `delete` callback. We don't do any special work in
+these two callbacks, just log and return:
+
+``` erlang
+handoff_finished(_TargetNode, State) ->
+  log("finished handoff", State),
+  {ok, State}.
+
+delete(State) ->
+  log("deleting the vnode", State),
+  {ok, State#{data => #{}}}.
+```
+#### Ownership handoff example
+Handoff is a slow process, so it would be inconvenient to test it as
+part of our integration suite. Instead, let's do some shell
+experiments to see it in action. Clean the cluster and start three
+nodes:
+
+``` shell
+# terminal 1
+$ make clean_data
+$ make dev1
+
+# terminal 2
+$ make dev2
+
+# terminal 3
+$ make dev3
+```
+
+When the nodes are running, join the cluser as we did before:
+
+``` erlang
+%% node 2
+(rc_example2@127.0.0.1)1> riak_core:join('rc_example1@127.0.0.1').
+18:46:45.409 [info] 'rc_example2@127.0.0.1' changed from 'joining' to 'valid'
+
+%% node 3
+(rc_example3@127.0.0.1)1> riak_core:join('rc_example1@127.0.0.1').
+18:46:47.120 [info] 'rc_example3@127.0.0.1' changed from 'joining' to 'valid'
+```
+
+You may see a bunch of handoff messages now. Eventually the cluster
+will settle, with the ring evenly distributed across nodes:
+
+``` erlang
+(rc_example1@127.0.0.1)3> rc_example:ring_status().
+==================================== Nodes ====================================
+Node a: 21 ( 32.8%) rc_example1@127.0.0.1
+Node b: 22 ( 34.4%) rc_example2@127.0.0.1
+Node c: 21 ( 32.8%) rc_example3@127.0.0.1
+==================================== Ring =====================================
+abcc|abcc|abcc|abcc|abcc|abcc|abcc|abcc|abcc|abcc|abbc|abba|abba|abba|abba|abba|
+ok
+```
+
+Let's add a key, and use the `keys` function to find out what node
+it ends up in:
+
+
+``` erlang
+(rc_example1@127.0.0.1)4> rc_example:put(k1, hello).
+ok
+(rc_example1@127.0.0.1)5> rc_example:keys().
+{ok,[{1141798154164767904846628775559596109106197299200,
+      'rc_example2@127.0.0.1', [k1]}]}
+```
+
+In my case, `k1` is routed to the second node `
+'rc_example2@127.0.0.1'` (it can be a different one in your
+machine). Let's see what happens if we make that node (the one that
+holds the Key/Value pair) leave the cluster:
+
+``` erlang
+(rc_example2@127.0.0.1)2> riak_core:leave().
+ok
+```
+
+You'll get a bunch of handoff logs again in your screen. During this
+period, `rc_example:ring_status()` will show the
+percentage of the ring assigned to the node decreasing until it
+reaches zero. After this the node will be shutdown, and from any of
+the remaining nodes you'll see something like this:
+
+``` erlang
+14:53:24.322 [info] 'rc_example2@127.0.0.1' changed from 'leaving' to 'exiting'
+14:53:24.351 [info] 'rc_example2@127.0.0.1' removed from cluster
+(previously: 'exiting')
+(rc_example1@127.0.0.1)6> rc_example:ring_status().
+==================================== Nodes ====================================
+Node a: 32 ( 50.0%) rc_example1@127.0.0.1
+Node b: 32 ( 50.0%) rc_example3@127.0.0.1
+==================================== Ring =====================================
+abab|abab|abab|abab|abab|abab|abab|abab|abab|abab|abab|abab|abab|abab|abab|abab|
+ok
+```
+
+Now the entire ring is distributed among the two remaining nodes. If
+we now query for `k1`, we'll confirm that another one took ownership
+of that key:
+
+``` erlang
+(rc_example1@127.0.0.1)7> rc_example:get(k1).
+hello
+{ok,[{1141798154164767904846628775559596109106197299200,
+      'rc_example1@127.0.0.1', [k1]}]}
+```
+
+In my case, it is `'rc_example1@127.0.0.1'` that took over that part
+of the ring.
+
+#### Hinted handoff example
+
+The previous section demonstrated what happens when we intentionally
+change the cluster by removing a node. Now let's see what happens when
+there's a failure and a node becomes unexpectedly unavailable. We
+didn't add replication as discussed in
+the [fault-tolerance section](#7-redundancy-and-fault-tolerance), so
+we can't expect to preserve data from the failing node, but we can see
+the hinted handoff mechanics anyway: the failing node won't lose
+ownership of its partitions, but the commands that arrive while it's down will
+have to be temporarily routed to available nodes. When the
+failing node comes back online, it will receive handoffs with the data
+created while it was down.
+
+Repeat the steps from previous section to clean the data, restart the
+nodes and join the cluster. Set a key again, and check in which node
+it resides:
+
+``` erlang
+(rc_example1@127.0.0.1)3> rc_example:put(k1, hello).
+ok
+(rc_example1@127.0.0.1)4> rc_example:keys().
+{ok,[{1141798154164767904846628775559596109106197299200,
+      'rc_example2@127.0.0.1', [k1]}]}
+```
+
+In this case, `k1` physically resides in
+`'rc_example2@127.0.0.1'`. Kill that node with `ctrl-g q` or a similar
+command. At this point the `k1` key and its value will be lost,
+because we don't have any kind of data replication; but if you put the
+key again, you'll notice it will be saved in one of the live nodes:
+
+``` erlang
+(rc_example1@127.0.0.1)6> rc_example:get(k1).
+not_found
+(rc_example1@127.0.0.1)7> rc_example:put(k1, newvalue).
+ok
+(rc_example1@127.0.0.1)8> rc_example:get(k1).
+newvalue
+```
+
+Now start the killed node again, and try to retrieve `k1`:
+
+``` erlang
+(rc_example1@127.0.0.1)9> rc_example:get(k1).
+not_found
+```
+
+The second node recovered ownership of the partition to which `k1`
+belongs, but doesn't (yet) have any value for it. If you wait a while
+(around a minute in my laptop), you should see something along these lines:
+
+```
+16:20:56.845 [info] [ND1G8YLUY5OVK16UNH2ZITWHUUGHOU8] starting handoff
+16:20:56.860 [info] Starting hinted transfer of rc_example_vnode from 'rc_example1@127.0.0.1' 1141798154164767904846628775559596109106197299200 to 'rc_example2@127.0.0.1' 1141798154164767904846628775559596109106197299200
+16:20:56.860 [info] [ND1G8YLUY5OVK16UNH2ZITWHUUGHOU8] Received fold request for handoff
+16:20:56.862 [info] hinted transfer of rc_example_vnode from 'rc_example1@127.0.0.1' 1141798154164767904846628775559596109106197299200 to 'rc_example2@127.0.0.1' 1141798154164767904846628775559596109106197299200 completed: sent 32.00 B bytes in 1 of 1 objects in 0.00 seconds (63.78 KB/second)
+16:20:56.862 [info] [ND1G8YLUY5OVK16UNH2ZITWHUUGHOU8] finished handoff
+```
+
+The fallback node that temporarily held `k1` handed over its data back
+to the vnode in rc_example2. If you get the key again, you should see
+the new value, this time coming from rc_example2:
+
+``` erlang
+(rc_example1@127.0.0.1)10> rc_example:get(k1).
+newvalue
+(rc_example1@127.0.0.1)11> rc_example:keys().
+{ok,[{1141798154164767904846628775559596109106197299200,
+      'rc_example2@127.0.0.1', [k1]}]}
+```

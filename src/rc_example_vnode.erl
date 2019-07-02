@@ -19,7 +19,7 @@
          handle_coverage/4,
          handle_exit/3]).
 
--define(INFO(String, Args, State), mylog:info("[~40.16.#B] " ++ String, [maps:get(partition,State)|Args])).
+-define(INFO(String, Args, State), lager:info("[~40.16.#B] " ++ String, [maps:get(partition,State)|Args])).
 -define(INFO(String, State), ?INFO(String, [], State)).
 
 %% API
@@ -118,7 +118,12 @@ handle_coverage(keys, _KeySpaces, {_, ReqId, _}, State = #{data := Data}) ->
 handle_coverage(values, _KeySpaces, {_, ReqId, _}, State = #{data := Data}) ->
   ?INFO("Received values coverage", State),
   Values = maps:values(Data),
-  {reply, {ReqId, Values}, State}.
+  {reply, {ReqId, Values}, State};
+
+handle_coverage(clear, _KeySpaces, {_, ReqId, _}, State) ->
+  ?INFO("Received clear coverage", State),
+  NewState = State#{data => #{}},
+  {reply, {ReqId, []}, NewState}.
 
 handle_exit(_Pid, _Reason, State) ->
   {noreply, State}.
